@@ -11,7 +11,9 @@ router.get("/", (req, res) => {
   }
   res.sendStatus(403);
 });
-
+router.get('/health',(req, res)=>{
+  res.send('ok');
+})
 // Incoming messages
 router.post("/", async (req, res) => {
   const entry = req.body.entry?.[0];
