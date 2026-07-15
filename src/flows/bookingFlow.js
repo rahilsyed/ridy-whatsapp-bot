@@ -214,6 +214,24 @@ exports.handleMessage = async (phone, msg) => {
 
       // ---------------- SELECT PICKUP ---------------- //
       case "SELECT_PICKUP": {
+        // User shared a live/pinned location instead of picking from the list —
+        // honor it directly rather than re-showing stale search results.
+        if (isLocationMessage(msg)) {
+          const { latitude, longitude } = msg.location;
+          await metaService.sendMessage(phone, "🔍 Locating your address...");
+          const geocoded = await placesService.reverseGeocode(latitude, longitude);
+          session.pickup = geocoded
+            ? { address: geocoded.address, coordinates: geocoded.coordinates, schedulePickupNow: false, scheduleDateAfter: 0, scheduleDateBefore: 0 }
+            : extractLocation(msg);
+          session.pickupResults = null;
+          session.step = "ASK_DROP";
+          await metaService.sendMessage(
+            phone,
+            `✅ Pickup set to:\n${session.pickup.address}\n\nNow enter your destination or share 📌 location.\n(Wrong pickup? Type *back* to redo it.)\n\nExample: Al Gomhuriya Street, Khartoum, Sudan`
+          );
+          break;
+        }
+
         const pickupId = msg?.interactive?.list_reply?.id;
 
         if (pickupId === "place_none") {
@@ -222,6 +240,24 @@ exports.handleMessage = async (phone, msg) => {
             phone,
             "📍 Please enter your pickup address again:"
           );
+          break;
+        }
+
+        // No valid list selection — if the user typed free text instead of
+        // tapping the list (e.g. they didn't want any of the options and
+        // typed a different address), treat it as a brand-new search rather
+        // than silently re-showing the previous, now-irrelevant results.
+        if (!pickupId && msg?.text?.body) {
+          const newPickupResults = await placesService.searchPlaces(msg.text.body);
+          if (!newPickupResults.length) {
+            await metaService.sendMessage(
+              phone,
+              "❌ No locations found. Please try a different address."
+            );
+            return;
+          }
+          session.pickupResults = newPickupResults;
+          await metaService.sendPlacesList(phone, newPickupResults, "📍 Choose Pickup");
           break;
         }
 
@@ -289,6 +325,32 @@ exports.handleMessage = async (phone, msg) => {
 
       // ---------------- SELECT DROP ---------------- //
       case "SELECT_DROP": {
+        // User shared a live/pinned location instead of picking from the list —
+        // honor it directly rather than re-showing stale search results.
+        if (isLocationMessage(msg)) {
+          const { latitude: dropLat, longitude: dropLng } = msg.location;
+          await metaService.sendMessage(phone, "🔍 Locating your destination...");
+          const dropGeocoded = await placesService.reverseGeocode(dropLat, dropLng);
+          session.drop = dropGeocoded
+            ? { address: dropGeocoded.address, coordinates: dropGeocoded.coordinates, scheduleDateAfter: 0, scheduleDateBefore: 0 }
+            : extractLocation(msg);
+          session.dropResults = null;
+
+          const vehiclesFromLocation = await getVehicleTypes(
+            session.auth.token,
+            session.auth.customerId,
+            session.pickup.coordinates
+          );
+          session.vehicleTypes = vehiclesFromLocation.map((v) => ({
+            id: v.id,
+            title: v.title,
+            description: v.description || "",
+          }));
+          session.step = "ASK_VEHICLE";
+          await metaService.sendVehicleList(phone, session.vehicleTypes);
+          break;
+        }
+
         const dropId = msg?.interactive?.list_reply?.id;
 
         if (dropId === "place_none") {
@@ -297,6 +359,23 @@ exports.handleMessage = async (phone, msg) => {
             phone,
             "📍 Please enter your destination address again:"
           );
+          break;
+        }
+
+        // No valid list selection — if the user typed free text instead of
+        // tapping the list, treat it as a brand-new search rather than
+        // silently re-showing the previous, now-irrelevant results.
+        if (!dropId && msg?.text?.body) {
+          const newDropResults = await placesService.searchPlaces(msg.text.body);
+          if (!newDropResults.length) {
+            await metaService.sendMessage(
+              phone,
+              "❌ No locations found. Please try a different address."
+            );
+            return;
+          }
+          session.dropResults = newDropResults;
+          await metaService.sendPlacesList(phone, newDropResults, "📍 Choose Dropoff");
           break;
         }
 
