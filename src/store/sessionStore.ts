@@ -1,6 +1,7 @@
 // src/store/sessionStore.js
-const Redis = require("ioredis");
-const redis = new Redis( "redis://127.0.0.1:6379");
+import 'dotenv/config'
+import Redis from 'ioredis';
+const redis = new Redis(process.env.REDIS_URL ||  "redis://127.0.0.1:6379");
 
 export const getSession = async (phone: any) => {
   const data = await redis.get(phone);
