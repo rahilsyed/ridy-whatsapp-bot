@@ -1,18 +1,10 @@
-// src/webhook.js
-// const express = require("express");
-// const router = express.Router();
-// const { handleMessage } = require("./flows/bookingFlow");
-// const { isDuplicateMessage } = require("./store/sessionStore");
-
 import crypto from "crypto";
 import { Request, Response, NextFunction, Router } from "express";
 import { isDuplicateMessage } from "./store/sessionStore";
 import { handleMessage } from "./flows/bookingFlow";
 const router = Router();
 
-// Verifies that POST bodies actually came from Meta, using the app secret
-// (Meta App Dashboard → Settings → Basic → App Secret), not the access token.
-// Without this, anyone who finds the URL can POST fake WhatsApp messages.
+
 function verifySignature(req: Request, res: Response, next: NextFunction) {
   const signature = req.get("x-hub-signature-256");
   const appSecret = process.env.META_APP_SECRET;
