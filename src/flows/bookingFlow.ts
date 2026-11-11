@@ -17,23 +17,35 @@ const BASE_URL = process.env.BASE_URL;
 
 const SERVICE_ID = "ihJseWkM1HVyLQ_ySVuxf";
 
+// TEMPORARY: static vehicle list until the new vehicles API is available.
+// Each id must be unique — ASK_VEHICLE looks up the customer's choice by id.
+const STATIC_VEHICLES = [
+  { id: "economy", title: "Sedan", description: "Comfortable and cheap" },
+  { id: "comfort", title: "SUV", description: "Extra space for up to 6 people" },
+  { id: "premium", title: "Luxury", description: "Premium car for a top-class ride" },
+];
+
 async function getVehicleTypes(token: any, customerId: any, coordinates: any) {
-  const [longitude, latitude] = coordinates;
-  const url = `${BASE_URL}/services/${SERVICE_ID}/vehicles`;
-  console.log("[getVehicleTypes] GET", url);
+  console.log("[getVehicleTypes] using STATIC_VEHICLES (API disabled)");
+  return STATIC_VEHICLES;
 
-  const res = await axios.get(url, {
-    params: { customerId, latitude, longitude },
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Accept-Language": "en",
-    },
-  });
-
-  console.log("[getVehicleTypes] status:", res.status);
-  console.log("[getVehicleTypes] response:", JSON.stringify(res.data, null, 2));
-
-  return res.data.data;
+  // TODO: restore when the new vehicles endpoint is ready (path/response may change).
+  // const [longitude, latitude] = coordinates;
+  // const url = `${BASE_URL}/services/${SERVICE_ID}/vehicles`;
+  // console.log("[getVehicleTypes] GET", url);
+  //
+  // const res = await axios.get(url, {
+  //   params: { customerId, latitude, longitude },
+  //   headers: {
+  //     Authorization: `Bearer ${token}`,
+  //     "Accept-Language": "en",
+  //   },
+  // });
+  //
+  // console.log("[getVehicleTypes] status:", res.status);
+  // console.log("[getVehicleTypes] response:", JSON.stringify(res.data, null, 2));
+  //
+  // return res.data.data;
 }
 
 async function createOrder(session: any) {
