@@ -1,7 +1,14 @@
 // src/store/sessionStore.js
 import 'dotenv/config'
 import Redis from 'ioredis';
-const redis = new Redis(process.env.REDIS_URL ||  "redis://127.0.0.1:6379");
+// On Vercel there is no local Redis, so a missing REDIS_URL is a config error.
+if (!process.env.REDIS_URL && process.env.VERCEL) {
+  console.error("[redis] REDIS_URL is not set — add it in Vercel → Settings → Environment Variables and redeploy");
+}
+const redis = new Redis(process.env.REDIS_URL || "redis://127.0.0.1:6379", {
+  // Fail a request after a few attempts instead of ~20 s of retries.
+  maxRetriesPerRequest: 3,
+});
 redis.on("error", (err) => console.error("[redis]", err.message));
 
 export const getSession = async (phone: any) => {

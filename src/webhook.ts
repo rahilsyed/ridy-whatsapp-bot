@@ -35,7 +35,6 @@ function verifySignature(req: Request, res: Response, next: NextFunction) {
 }
 // Verification
 router.get("/", (req: Request, res: Response) => {
-  console.log('hub.verify_token',req.query["hub.verify_token"]);
   
   if (req.query["hub.verify_token"] === process.env.VERIFY_TOKEN) {
     return res.send(req.query["hub.challenge"]);
