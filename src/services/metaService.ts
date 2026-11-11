@@ -124,3 +124,120 @@ export const sendConfirmButtons = async (
     { headers: metaHeaders() },
   );
 };
+
+// WhatsApp limits: header 60 chars, body 1024, footer 60, button title 20.
+const clip = (text: string, max: number) =>
+  text.length > max ? `${text.slice(0, max - 1)}…` : text;
+
+export const sendBookingConfirmation = async (
+  to: any,
+  booking: {
+    orderId?: string;
+    status?: string;
+    pickup: string;
+    drop: string;
+    vehicle: string;
+    fare?: string;
+    estimatedFare?: string;
+    payment?: string;
+    options?: string[];
+  },
+) => {
+  const buttons = [
+    { type: "reply", reply: { id: "post_new_ride", title: "🚕 Book another" } },
+    { type: "reply", reply: { id: "post_done", title: "👍 All done" } },
+  ];
+  // Max 3 reply buttons; cancelling needs the order id.
+  if (booking.orderId) {
+    buttons.push({ type: "reply", reply: { id: "post_cancel", title: "❌ Cancel ride" } });
+  }
+
+  const lines = [
+    "Your ride request has been placed. We're finding a driver for you 🚖",
+    "",
+    booking.orderId ? `🆔 *Booking ID:* ${booking.orderId}` : null,
+    booking.status ? `📌 *Status:* ${booking.status}` : null,
+    "",
+    `🟢 *Pickup*\n${clip(booking.pickup, 200)}`,
+    "",
+    `🔴 *Drop-off*\n${clip(booking.drop, 200)}`,
+    "",
+    `🚗 *Vehicle:* ${booking.vehicle}`,
+    booking.options?.length ? `✨ *Extras:* ${booking.options.join(", ")}` : null,
+    booking.fare ? `💰 *Your offer:* ${booking.fare}` : null,
+    booking.estimatedFare ? `📊 *Estimated fare:* ${booking.estimatedFare}` : null,
+    booking.payment ? `💳 *Payment:* ${booking.payment}` : null,
+    "",
+    "We'll message you here when your driver is on the way.",
+  ].filter((l) => l !== null);
+
+  await meta.post(
+    graphUrl(),
+    {
+      messaging_product: "whatsapp",
+      to,
+      type: "interactive",
+      interactive: {
+        type: "button",
+        header: { type: "text", text: "✅ Ride booked!" },
+        body: { text: clip(lines.join("\n"), 1024) },
+        footer: { text: "Thank you for riding with us" },
+        action: { buttons },
+      },
+    },
+    { headers: metaHeaders() },
+  );
+};
+
+// Plain message with up to 3 reply buttons.
+export const sendButtons = async (
+  to: any,
+  body: string,
+  buttons: { id: string; title: string }[],
+) => {
+  await meta.post(
+    graphUrl(),
+    {
+      messaging_product: "whatsapp",
+      to,
+      type: "interactive",
+      interactive: {
+        type: "button",
+        body: { text: clip(body, 1024) },
+        action: {
+          buttons: buttons.slice(0, 3).map((b) => ({
+            type: "reply",
+            reply: { id: b.id, title: clip(b.title, 20) },
+          })),
+        },
+      },
+    },
+    { headers: metaHeaders() },
+  );
+};
+
+// A single "open link" button, e.g. to track the ride.
+export const sendLinkButton = async (
+  to: any,
+  body: string,
+  buttonText: string,
+  url: string,
+) => {
+  await meta.post(
+    graphUrl(),
+    {
+      messaging_product: "whatsapp",
+      to,
+      type: "interactive",
+      interactive: {
+        type: "cta_url",
+        body: { text: body },
+        action: {
+          name: "cta_url",
+          parameters: { display_text: clip(buttonText, 20), url },
+        },
+      },
+    },
+    { headers: metaHeaders() },
+  );
+};

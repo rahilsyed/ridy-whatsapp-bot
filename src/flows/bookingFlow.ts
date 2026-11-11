@@ -3,7 +3,10 @@ import axios from "axios";
 import { v4 as uuid } from "uuid";
 import { deleteSession, getSession, setSession } from "../store/sessionStore";
 import {
+  sendBookingConfirmation,
+  sendButtons,
   sendConfirmButtons,
+  sendLinkButton,
   sendMessage,
   sendPlacesList,
   sendVehicleList,
@@ -55,6 +58,18 @@ const ORDER_DEFAULTS = {
   trip_options: ["ac", "child_seat"],
   payment_method: "wallet",
 };
+const PROPOSED_PRICE_MINOR = 5500;
+
+// Labels shown to the customer for API values.
+const TRIP_OPTION_LABELS: Record<string, string> = { ac: "AC", child_seat: "Child seat" };
+const PAYMENT_LABELS: Record<string, string> = { wallet: "Wallet", cash: "Cash", card: "Card" };
+
+// "in_progress" -> "In progress"
+const humanize = (value: string) =>
+  value.charAt(0).toUpperCase() + value.slice(1).replace(/_/g, " ").toLowerCase();
+
+const PICKUP_PROMPT =
+  "📍 Let's start with your pickup.\n\nYou can:\n• Type your address\n• Or share your 📌 *live location* using WhatsApp's location feature\n\nExample: Office 45, Nile Street, Khartoum, Sudan";
 
 // Session locations store coordinates as [longitude, latitude].
 const toOrderLocation = (loc: any) => ({
@@ -82,7 +97,7 @@ async function createOrder(session: any, phone: string) {
       vehicle_type: { id: session.booking.vehicleType.id },
       ...ORDER_DEFAULTS,
     },
-    proposed_price_minor: 5500,
+    proposed_price_minor: PROPOSED_PRICE_MINOR,
   };
 
   console.log("[createOrder] payload123:", JSON.stringify(payload, null, 2));
@@ -100,6 +115,49 @@ async function createOrder(session: any, phone: string) {
   return res;
 }
 
+async function getOrder(token: string, orderId: string) {
+  const res = await axios.get(`${BASE_URL}/order/v1/orders/${orderId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+    timeout: 15000,
+  });
+  return res.data;
+}
+
+// The API rejects a cancel whose `version` is stale (e.g. a driver accepted
+// in the meantime), so read the order's current version right before cancelling.
+async function cancelOrder(token: string, orderId: string) {
+  const current = await getOrder(token, orderId);
+  if (current.state === "cancelled") return current;
+
+  const res = await axios.post(
+    `${BASE_URL}/order/v1/orders/${orderId}/cancel`,
+    {
+      version: current.version,
+      reason: "changed_mind",
+      note: "Cancelled by customer via WhatsApp",
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Idempotency-Key": uuid(),
+        "Content-Type": "application/json",
+      },
+      timeout: 15000,
+    },
+  );
+  console.log("[cancelOrder] response:", JSON.stringify(res.data, null, 2));
+  return res.data;
+}
+
+// Amounts are in minor units: 8250 + "SDG" -> "SDG 82.50".
+const formatMoney = (minor: number, currency?: string) =>
+  `${currency ? `${currency} ` : ""}${(minor / 100).toFixed(2)}`;
+
+const BOOK_AGAIN_BUTTONS = [
+  { id: "post_new_ride", title: "🚕 Book another" },
+  { id: "post_done", title: "👍 All done" },
+];
+
 function isLocationMessage(msg: any) {
   return msg?.type === "location";
 }
@@ -116,7 +174,7 @@ function extractLocation(msg: any) {
 
 // ---- Main Flow ---- //
 
-export const handleMessage = async (phone: any, msg: any) => {
+export const handleMessage = async (phone: any, msg: any): Promise<void> => {
   console.log("msg is here ", msg);
 
   let session = await getSession(phone);
@@ -561,35 +619,155 @@ export const handleMessage = async (phone: any, msg: any) => {
         if (reply === "confirm_no") {
           await sendMessage(phone, "❌ Booking cancelled.");
           session = { step: "ASK_PICKUP", auth: session.auth };
-          await sendMessage(
+          await sendMessage(phone, PICKUP_PROMPT);
+          break;
+        }
+
+        await sendMessage(phone, "⏳ Booking your ride, please wait...");
+
+        const orderRes = await createOrder(session, phone);
+        // Order shape (from the cancel/GET responses): id, state, version,
+        // currency, proposed_price_minor, estimated_price_minor.
+        const order = orderRes.data || {};
+        const orderId = order.id;
+        const trackUrl = order.track_url || order.tracking_url;
+        const proposedMinor = order.proposed_price_minor ?? PROPOSED_PRICE_MINOR;
+
+        await sendBookingConfirmation(phone, {
+          orderId,
+          status: order.state ? humanize(String(order.state)) : undefined,
+          pickup: session.pickup.address,
+          drop: session.drop.address,
+          vehicle: session.selectedVehicleTitle,
+          fare: formatMoney(proposedMinor, order.currency),
+          estimatedFare:
+            order.estimated_price_minor != null &&
+            order.estimated_price_minor !== proposedMinor
+              ? formatMoney(order.estimated_price_minor, order.currency)
+              : undefined,
+          payment:
+            PAYMENT_LABELS[ORDER_DEFAULTS.payment_method] ||
+            humanize(ORDER_DEFAULTS.payment_method),
+          options: ORDER_DEFAULTS.trip_options.map(
+            (o) => TRIP_OPTION_LABELS[o] || humanize(o),
+          ),
+        });
+
+        if (trackUrl) {
+          await sendLinkButton(
             phone,
-            "📍 Let's start with your pickup.\n\nYou can:\n• Type your address\n• Or share your 📌 *live location* using WhatsApp's location feature\n\nExample: Office 45, Nile Street, Khartoum, Sudan",
+            "📡 Follow your ride live on the map.",
+            "Track ride",
+            trackUrl,
+          );
+        }
+
+        // Keep auth + order id; wait for "Book another" / "All done" / "Cancel ride"
+        session = { step: "POST_BOOKING", auth: session.auth, lastOrderId: orderId };
+        break;
+
+      // ---------------- AFTER BOOKING ---------------- //
+      case "POST_BOOKING": {
+        const postReply = msg?.interactive?.button_reply?.id;
+
+        // "Cancel ride" button (or typing "cancel"): ask before cancelling.
+        if ((postReply === "post_cancel" || msgText === "cancel") && session.lastOrderId) {
+          session.step = "CONFIRM_CANCEL";
+          await sendButtons(
+            phone,
+            "⚠️ Are you sure you want to cancel this ride?",
+            [
+              { id: "cancel_yes", title: "Yes, cancel" },
+              { id: "cancel_no", title: "No, keep ride" },
+            ],
           );
           break;
         }
 
-        await sendMessage(phone, "⏳ Booking your ride...");
+        if (postReply === "post_cancel") {
+          // Tapped "Cancel ride" on an older message after it was already cancelled.
+          await sendButtons(phone, "ℹ️ That ride is already cancelled.", BOOK_AGAIN_BUTTONS);
+          return;
+        }
 
-        const orderRes = await createOrder(session, phone);
-        // New API's response shape not confirmed yet — accept the likely fields.
-        const order = orderRes.data?.data || orderRes.data || {};
-        const orderId = order.id || order.order_id || order.orderId;
-        const trackUrl = order.track_url || order.trackOrder;
+        if (postReply === "post_done") {
+          // START + saved token skips login and goes straight to pickup next time.
+          session = { step: "START", auth: session.auth };
+          await sendMessage(
+            phone,
+            "🙏 Thanks for booking with us! Have a safe trip.\n\nWhenever you need another ride, just send *Hi*.",
+          );
+          break;
+        }
 
-        let successMsg = "✅ Ride booked successfully!";
-        if (orderId) successMsg += `\n\n🆔 Order: ${orderId}`;
-        if (trackUrl) successMsg += `\n🔗 Track: ${trackUrl}`;
-
-        await sendMessage(phone, successMsg);
-
-        // Keep auth, reset to pickup for next ride
         session = { step: "ASK_PICKUP", auth: session.auth };
 
-        await sendMessage(
+        if (postReply === "post_new_ride") {
+          await sendMessage(phone, `🚕 Let's book your next ride!\n\n${PICKUP_PROMPT}`);
+          break;
+        }
+
+        // Typed an address or shared a location instead of tapping a button:
+        // treat it as the pickup for a new booking.
+        await setSession(phone, session);
+        return handleMessage(phone, msg);
+      }
+
+      // ---------------- CANCEL CONFIRMATION ---------------- //
+      case "CONFIRM_CANCEL": {
+        const cancelReply = msg?.interactive?.button_reply?.id;
+
+        if (cancelReply === "cancel_no") {
+          session.step = "POST_BOOKING";
+          await sendButtons(phone, "👍 Great, your ride is still on!", [
+            ...BOOK_AGAIN_BUTTONS,
+            { id: "post_cancel", title: "❌ Cancel ride" },
+          ]);
+          break;
+        }
+
+        if (cancelReply !== "cancel_yes") {
+          await sendButtons(
+            phone,
+            "Please tap a button: do you want to cancel this ride?",
+            [
+              { id: "cancel_yes", title: "Yes, cancel" },
+              { id: "cancel_no", title: "No, keep ride" },
+            ],
+          );
+          return;
+        }
+
+        const cancelledOrderId = session.lastOrderId;
+        try {
+          const cancelled = await cancelOrder(session.auth.token, cancelledOrderId);
+          console.log("[cancel] order", cancelled.id, "state:", cancelled.state);
+        } catch (cancelErr: any) {
+          const cancelStatus = cancelErr?.response?.status;
+          // 401 = token expired: let the main handler re-login.
+          if (!cancelStatus || cancelStatus === 401 || cancelStatus >= 500) {
+            throw cancelErr;
+          }
+          // 4xx: the backend refused, e.g. the ride already started.
+          console.error("[cancel] rejected:", cancelErr.response.data);
+          session.step = "POST_BOOKING";
+          await sendButtons(
+            phone,
+            "😕 Sorry, this ride can't be cancelled right now — it may already be in progress.",
+            BOOK_AGAIN_BUTTONS,
+          );
+          break;
+        }
+
+        // No lastOrderId: the cancelled ride can't be cancelled again.
+        session = { step: "POST_BOOKING", auth: session.auth };
+        await sendButtons(
           phone,
-          "📍 Need another ride? Enter your pickup location or type *menu* to restart.",
+          `✅ Your ride has been cancelled.\n\n🆔 Booking ID: ${cancelledOrderId}\n\nNeed a ride again?`,
+          BOOK_AGAIN_BUTTONS,
         );
         break;
+      }
     }
 
     if (session) {
