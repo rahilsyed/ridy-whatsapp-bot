@@ -9,6 +9,7 @@ import {
   sendVehicleList,
 } from "../services/metaService";
 import { login, verify } from "../services/authService";
+import { ensureRegistered } from "../services/profileService";
 import { reverseGeocode, searchPlaces } from "../services/placesService";
 
 const BASE_URL = process.env.BASE_URL;
@@ -48,26 +49,51 @@ async function getVehicleTypes(token: any, customerId: any, coordinates: any) {
   // return res.data.data;
 }
 
-async function createOrder(session: any) {
+// TEMPORARY: fixed order options (from the Postman example) until the flow
+// asks the customer for them / the backend quotes a price.
+const ORDER_DEFAULTS = {
+  trip_options: ["ac", "child_seat"],
+  payment_method: "wallet",
+};
+
+// Session locations store coordinates as [longitude, latitude].
+const toOrderLocation = (loc: any) => ({
+  address: loc.address,
+  lat: loc.coordinates[1],
+  lon: loc.coordinates[0],
+});
+
+async function createOrder(session: any, phone: string) {
+  // Normally set at login; retry here if registration failed then.
+  if (!session.auth.serviceProfileId) {
+    session.auth.serviceProfileId = await ensureRegistered(
+      session.auth.token,
+      session.auth.customerId,
+      phone,
+    );
+  }
+
   const payload = {
-    pickup: session.pickup,
-    dropoffs: [session.drop],
-    service: session.booking.service,
-    vehicleType: session.booking.vehicleType,
-    customerId: session.auth.customerId,
-    promoCode: "",
-    isScheduled: false,
+    service_profile_id: session.auth.serviceProfileId,
+    customer_id: session.auth.customerId,
+    order_details: {
+      pickup: toOrderLocation(session.pickup),
+      dropoffs: [toOrderLocation(session.drop)],
+      vehicle_type: { id: session.booking.vehicleType.id },
+      ...ORDER_DEFAULTS,
+    },
+    proposed_price_minor: 5500,
   };
 
-  console.log("[createOrder] payload:", JSON.stringify(payload, null, 2));
+  console.log("[createOrder] payload123:", JSON.stringify(payload, null, 2));
 
-  const res = await axios.post(`${BASE_URL}/orders`, payload, {
+  const res = await axios.post(`${BASE_URL}/order/v1/orders`, payload, {
     headers: {
       Authorization: `Bearer ${session.auth.token}`,
-      "Idempotency-key": uuid(),
-      "Accept-Language": "en",
+      "Idempotency-Key": uuid(),
       "Content-Type": "application/json",
     },
+    timeout: 15000,
   });
 
   console.log("[createOrder] response:", JSON.stringify(res.data, null, 2));
@@ -214,6 +240,13 @@ export const handleMessage = async (phone: any, msg: any) => {
 
         session.auth = auth;
         delete session.loginHandle;
+
+        // Customer must be registered with the service profile before ordering.
+        session.auth.serviceProfileId = await ensureRegistered(
+          auth.token,
+          auth.customerId,
+          phone,
+        );
 
         session.step = "ASK_PICKUP";
 
@@ -537,9 +570,11 @@ export const handleMessage = async (phone: any, msg: any) => {
 
         await sendMessage(phone, "⏳ Booking your ride...");
 
-        const orderRes = await createOrder(session);
-        const orderId = orderRes.data?.data?.orderId || orderRes.data?.data?.id;
-        const trackUrl = orderRes.data?.data?.trackOrder;
+        const orderRes = await createOrder(session, phone);
+        // New API's response shape not confirmed yet — accept the likely fields.
+        const order = orderRes.data?.data || orderRes.data || {};
+        const orderId = order.id || order.order_id || order.orderId;
+        const trackUrl = order.track_url || order.trackOrder;
 
         let successMsg = "✅ Ride booked successfully!";
         if (orderId) successMsg += `\n\n🆔 Order: ${orderId}`;
