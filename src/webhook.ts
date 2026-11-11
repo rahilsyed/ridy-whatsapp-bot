@@ -2,6 +2,7 @@ import crypto from "crypto";
 import { Request, Response, NextFunction, Router } from "express";
 import { isDuplicateMessage } from "./store/sessionStore";
 import { handleMessage } from "./flows/bookingFlow";
+import { waitUntil } from "@vercel/functions";
 const router = Router();
 
 
@@ -52,29 +53,34 @@ router.get("/health", (req :Request, res:Response) => {
 router.post("/", verifySignature, async (req:Request, res:Response) => {
   const entry = req.body.entry?.[0];
   const msg = entry?.changes?.[0]?.value?.messages?.[0];
-  if (msg) {
-    // The business number that received this message; PHONE_NUMBER_ID must match it.
-    console.log("[webhook] received on:", entry?.id, entry?.changes?.[0]?.value?.metadata);
-  }
+
+  // Always ack quickly so Meta doesn't redeliver.
   res.sendStatus(200);
 
+  // Status updates (sent/delivered/read) have no message — nothing to do.
   if (!msg) return;
 
-  try {
-    if (await isDuplicateMessage(msg.id)) {
-      console.log("[webhook] duplicate delivery, skipping:", msg.id);
-      return;
-    }
+  // The business number that received this message; PHONE_NUMBER_ID must match it.
+  console.log("[webhook] received on:", entry?.id, entry?.changes?.[0]?.value?.metadata);
 
-    const phone = msg.from;
-    await handleMessage(phone, msg);
-  } catch (err: any) {
-    console.error(
-      "[webhook] error:",
-      err?.config?.url,
-      err?.response?.status,
-      JSON.stringify(err?.response?.data) || err?.message,
-    );
-  }
+  // On Vercel, keep the function alive until processing finishes.
+  waitUntil(
+    (async () => {
+      try {
+        if (await isDuplicateMessage(msg.id)) {
+          console.log("[webhook] duplicate delivery, skipping:", msg.id);
+          return;
+        }
+        await handleMessage(msg.from, msg);
+      } catch (err: any) {
+        console.error(
+          "[webhook] error:",
+          err?.config?.url,
+          err?.response?.status,
+          JSON.stringify(err?.response?.data) || err?.message,
+        );
+      }
+    })(),
+  );
 });
 export default router

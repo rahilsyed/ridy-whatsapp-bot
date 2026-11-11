@@ -13,6 +13,11 @@ app.use(
 
 app.use("/webhook", webhook);
 
-app.listen(process.env.PORT, () => {
-  console.log("Server running on port",process.env.PORT);
-});
+if (!process.env.VERCEL) {
+  app.listen(process.env.PORT, () => {
+    console.log("Server running on port", process.env.PORT);
+  });
+}
+
+// Vercel imports the app instead of running listen().
+export default app;

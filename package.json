@@ -17,6 +17,7 @@
     "@types/dotenv": "^6.1.1",
     "@types/ioredis": "^4.28.10",
     "@types/uuid": "^10.0.0",
+    "@vercel/functions": "^3.11.1",
     "axios": "^1.18.1",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
