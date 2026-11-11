@@ -1,6 +1,6 @@
 import 'dotenv/config'
 import axios from "axios";
-import { v4 as uuid } from "uuid";
+import { randomUUID as uuid } from "crypto";
 import { deleteSession, getSession, setSession } from "../store/sessionStore";
 import {
   sendBookingConfirmation,
