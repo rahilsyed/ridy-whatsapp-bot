@@ -1,5 +1,7 @@
 // src/services/metaService.js
 import axios from "axios";
+// Without a timeout a network problem makes the bot hang silently instead of erroring.
+const meta = axios.create({ timeout: 15000 });
 function graphUrl() {
   return `https://graph.facebook.com/v18.0/${process.env.PHONE_NUMBER_ID}/messages`;
 }
@@ -12,7 +14,7 @@ function metaHeaders() {
 }
 
 export const sendMessage = async (to: any, text: any) => {
-  await axios.post(
+  await meta.post(
     graphUrl(),
     { messaging_product: "whatsapp", to, text: { body: text } },
     { headers: metaHeaders() },
@@ -26,7 +28,7 @@ export const sendVehicleList = async (to: any, vehicles: any) => {
     description: v.description || "",
   }));
 
-  await axios.post(
+  await meta.post(
     graphUrl(),
     {
       messaging_product: "whatsapp",
@@ -68,7 +70,7 @@ export const sendPlacesList = async (to: any, places: any, header: any) => {
     description: "Search again with a different address",
   });
 
-  await axios.post(
+  await meta.post(
     graphUrl(),
     {
       messaging_product: "whatsapp",
@@ -97,7 +99,7 @@ export const sendConfirmButtons = async (
   drop: any,
   vehicle: any,
 ) => {
-  await axios.post(
+  await meta.post(
     graphUrl(),
     {
       messaging_product: "whatsapp",

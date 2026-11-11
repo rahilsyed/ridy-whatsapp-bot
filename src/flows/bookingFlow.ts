@@ -159,7 +159,7 @@ export const handleMessage = async (phone: any, msg: any) => {
     switch (session.step) {
       // ---------------- START ---------------- //
       case "START":
-        await login(phone);
+        session.loginHandle = (await login(phone)).loginHandle;
 
         session.step = "ASK_OTP";
 
@@ -175,9 +175,33 @@ export const handleMessage = async (phone: any, msg: any) => {
           await sendMessage(phone, "Please enter the OTP sent to your number:");
           return;
         }
-        const auth = await verify(phone, msg.text.body);
+        if (
+          !session.loginHandle ||
+          msg.text.body.trim().toLowerCase() === "resend"
+        ) {
+          session.loginHandle = (await login(phone)).loginHandle;
+          await sendMessage(phone, "📩 A new OTP has been sent. Please enter it:");
+          break;
+        }
+
+        let auth;
+        try {
+          auth = await verify(session.loginHandle, msg.text.body);
+        } catch (verifyErr: any) {
+          const verifyStatus = verifyErr?.response?.status;
+          if (verifyStatus >= 400 && verifyStatus < 500) {
+            console.error("[verify] rejected:", verifyErr.response.data);
+            await sendMessage(
+              phone,
+              "❌ That code is invalid or expired. Please try again, or reply *resend* for a new code.",
+            );
+            return;
+          }
+          throw verifyErr;
+        }
 
         session.auth = auth;
+        delete session.loginHandle;
 
         session.step = "ASK_PICKUP";
 
@@ -530,15 +554,24 @@ export const handleMessage = async (phone: any, msg: any) => {
     const status = err?.response?.status;
     console.error("Flow Error:", err?.response?.data || err.message);
 
-    if (status === 401) {
-      // Token expired — restart auth
-      await login(phone);
+    if (status === 401 && session?.auth?.token) {
+      // Customer token expired — restart auth. login() can fail too, so guard it
+      // and always reply to the customer instead of throwing out of the handler.
       await deleteSession(phone);
-      await sendMessage(
-        phone,
-        "🔐 Your session expired. A new OTP has been sent — please enter it:",
-      );
-      await setSession(phone, { step: "ASK_OTP" });
+      try {
+        const { loginHandle } = await login(phone);
+        await sendMessage(
+          phone,
+          "🔐 Your session expired. A new OTP has been sent — please enter it:",
+        );
+        await setSession(phone, { step: "ASK_OTP", loginHandle });
+      } catch (loginErr: any) {
+        console.error(
+          "Re-login failed:",
+          loginErr?.response?.data || loginErr.message,
+        );
+        await sendMessage(phone, "⚠️ Something went wrong. Please try again.");
+      }
     } else {
       await sendMessage(phone, "⚠️ Something went wrong. Please try again.");
       // Reset to pickup but keep auth so user doesn't need to re-verify OTP

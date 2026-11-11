@@ -1,40 +1,50 @@
 // src/services/authService.js
+import crypto from "crypto";
 import axios from "axios";
 const api = axios.create({
   baseURL: process.env.BASE_URL,
 });
 
-export const login = (phone:any) => {
-  return api.post(
-    "/customer/auth/login/initiate",
-    { phone },
-    {
-      headers: {
-        Authorization: `Bearer ${process.env.SYSTEM_AUTH_TOKEN}`,
-      },
-    }
-  );
+// Every auth call identifies this bot as an OAuth2 client:
+// X-Client-Key = base64("client_id:client_secret"), stored pre-encoded in CLIENT_KEY.
+api.interceptors.request.use((config) => {
+  const clientKey = process.env.CLIENT_KEY;
+  if (!clientKey) {
+    throw new Error("CLIENT_KEY must be set in the environment");
+  }
+  config.headers.set("X-Client-Key", clientKey);
+  config.headers.set("X-Request-Id", crypto.randomUUID());
+  return config;
+});
+
+// WhatsApp sends numbers without "+" (e.g. 919265825711); the API expects E.164.
+const toE164 = (phone: string) => (phone.startsWith("+") ? phone : `+${phone}`);
+
+// Sends an OTP to the customer. The returned loginHandle must be passed to verify().
+// No Authorization header: the customer has no token until verify() succeeds.
+export const login = async (phone: string) => {
+  const res = await api.post("/auth/v1/oauth2/login/passwordless/initiate", {
+    phone_number: toE164(phone),
+  });
+  return {
+    loginHandle: res.data.login_handle as string,
+    expiresAt: res.data.expires_at as string,
+  };
 };
 
-export const verify = async (phone:any, code:any) => {
-  const res = await api.post(
-    "/customer/auth/login/complete",
-    {
-      phone,
-      verificationCode: code,
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${process.env.SYSTEM_AUTH_TOKEN}`,
-      },
-    }
-  );
+export const verify = async (loginHandle: string, code: string) => {
+  const res = await api.post("/auth/v1/oauth2/login/passwordless/complete", {
+    code: code.trim(),
+    login_handle: loginHandle,
+  });
 
-  console.log("[verify] full response:", JSON.stringify(res.data, null, 2));
+  const { access_token, refresh_token, expires_in, id } = res.data;
+  console.log("[verify] logged in customer:", id);
 
-  // ⚠️ adjust after you send actual response
   return {
-    token: res.data.data.accessToken,
-    customerId: res.data.data.customerId,
+    token: access_token as string,
+    refreshToken: refresh_token as string,
+    customerId: id as string,
+    expiresAt: Date.now() + expires_in * 1000,
   };
 };

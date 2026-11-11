@@ -34,6 +34,8 @@ function verifySignature(req: Request, res: Response, next: NextFunction) {
 }
 // Verification
 router.get("/", (req: Request, res: Response) => {
+  console.log('hub.verify_token',req.query["hub.verify_token"]);
+  
   if (req.query["hub.verify_token"] === process.env.VERIFY_TOKEN) {
     return res.send(req.query["hub.challenge"]);
   }
@@ -50,6 +52,10 @@ router.get("/health", (req :Request, res:Response) => {
 router.post("/", verifySignature, async (req:Request, res:Response) => {
   const entry = req.body.entry?.[0];
   const msg = entry?.changes?.[0]?.value?.messages?.[0];
+  if (msg) {
+    // The business number that received this message; PHONE_NUMBER_ID must match it.
+    console.log("[webhook] received on:", entry?.id, entry?.changes?.[0]?.value?.metadata);
+  }
   res.sendStatus(200);
 
   if (!msg) return;
@@ -62,8 +68,13 @@ router.post("/", verifySignature, async (req:Request, res:Response) => {
 
     const phone = msg.from;
     await handleMessage(phone, msg);
-  } catch (err) {
-    console.error(err);
+  } catch (err: any) {
+    console.error(
+      "[webhook] error:",
+      err?.config?.url,
+      err?.response?.status,
+      JSON.stringify(err?.response?.data) || err?.message,
+    );
   }
 });
 export default router
